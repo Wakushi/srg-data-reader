@@ -24,6 +24,7 @@
     "@nestjs/config": "^4.0.1",
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
+    "@supabase/supabase-js": "^2.49.2",
     "@uniswap/v3-sdk": "^3.25.2",
     "dotenv": "^16.4.7",
     "ethers": "^6.13.5",

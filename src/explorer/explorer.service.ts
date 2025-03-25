@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ChainName } from 'entities/chains';
 import { RpcUrlConfig } from 'entities/rpc-url-config.type';
+import { LogEvent } from 'src/token/entities/token.types';
 import {
   Abi,
   AbiEvent,
@@ -61,11 +62,11 @@ export class ExplorerService {
     contract: Address;
     event: AbiEvent;
     fromBlock?: bigint | BlockTag;
-  }): Promise<Log[] | null> {
+  }): Promise<LogEvent[]> {
     try {
       const client = this.getClient(chain);
 
-      const logs: Log[] = await client.getLogs({
+      const logs: any[] = await client.getLogs({
         address: contract,
         event,
         fromBlock,
@@ -76,7 +77,7 @@ export class ExplorerService {
       return logs;
     } catch (error) {
       console.error('Error getting logs ' + error);
-      return null;
+      return [];
     }
   }
 
@@ -101,6 +102,8 @@ export class ExplorerService {
   public async getBlockNumberByTimestamp(
     chain: ChainName,
     timestamp: number,
+    maxRetries = 5,
+    initialDelay = 1000,
   ): Promise<any> {
     const alchemyChain: Record<ChainName, string> = {
       [ChainName.ETHEREUM]: 'eth-mainnet',
@@ -108,16 +111,50 @@ export class ExplorerService {
       [ChainName.BSC]: 'bnb-mainnet',
     };
 
-    try {
-      const response = await fetch(
-        `https://api.g.alchemy.com/data/v1/${this.config.apiKey}/utility/blocks/by-timestamp?networks=${alchemyChain[chain]}&timestamp=${timestamp}&direction=AFTER`,
-      );
+    let retries = 0;
+    let delay = initialDelay;
 
-      const { data } = await response.json();
+    while (retries <= maxRetries) {
+      try {
+        const response = await fetch(
+          `https://api.g.alchemy.com/data/v1/${this.config.apiKey}/utility/blocks/by-timestamp?networks=${alchemyChain[chain]}&timestamp=${timestamp}&direction=AFTER`,
+        );
 
-      return data[0].block.number;
-    } catch (error) {
-      console.error('Error fetching block number by timestamp :' + error);
+        if (!response.ok) {
+          const errorData = await response.json();
+
+          if (response.status === 429) {
+            throw new Error('Rate limit exceeded');
+          }
+
+          if (response.status >= 500) {
+            throw new Error(`Server error: ${response.status}`);
+          }
+        }
+
+        const { data } = await response.json();
+
+        if (!data || !data[0] || !data[0].block) {
+          throw new Error('Invalid response format from API');
+        }
+
+        return data[0].block.number;
+      } catch (error) {
+        retries++;
+
+        if (retries > maxRetries) {
+          console.error(`Failed after ${maxRetries} retries:`, error);
+          throw error;
+        }
+
+        console.warn(
+          `Retry attempt ${retries}/${maxRetries} after error: ${error}. Waiting ${delay}ms...`,
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, delay));
+
+        delay = delay * 2 * (0.9 + Math.random() * 0.2);
+      }
     }
   }
 
@@ -157,8 +194,21 @@ export class ExplorerService {
 
       return data;
     } catch (error) {
-      console.log('Error fetching block ' + error);
-      return null;
+      throw new error(`Error reading contract with ${functionName}()` + error);
+    }
+  }
+
+  public async isContract(address: string, chain: ChainName): Promise<boolean> {
+    try {
+      const client = this.getClient(chain);
+
+      const bytecode = await client.getCode({
+        address: address as `0x${string}`,
+      });
+
+      return bytecode ? bytecode !== '0x' : false;
+    } catch (error) {
+      return false;
     }
   }
 
