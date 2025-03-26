@@ -35,21 +35,16 @@ export class ExplorerService {
     contract: Address;
     blockNumber?: bigint | null;
   }): Promise<bigint> {
-    try {
-      const client = this.getClient(chain);
+    const client = this.getClient(chain);
 
-      const balanceParams: GetBalanceParameters = {
-        address: contract,
-        ...(blockNumber ? { blockNumber } : {}),
-      };
+    const balanceParams: GetBalanceParameters = {
+      address: contract,
+      ...(blockNumber ? { blockNumber } : {}),
+    };
 
-      const balance = await client.getBalance(balanceParams);
+    const balance = await client.getBalance(balanceParams);
 
-      return balance;
-    } catch (error) {
-      console.error('Error getting balance ' + error);
-      return 0n;
-    }
+    return balance;
   }
 
   public async getLogs({
@@ -65,16 +60,65 @@ export class ExplorerService {
   }): Promise<LogEvent[]> {
     try {
       const client = this.getClient(chain);
+      const allLogs: any[] = [];
 
-      const logs: any[] = await client.getLogs({
-        address: contract,
-        event,
-        fromBlock,
-      });
+      if (
+        chain === ChainName.BSC &&
+        (fromBlock === 0n || fromBlock === 'earliest')
+      ) {
+        const latestBlock = await client.getBlockNumber();
 
-      logs.sort((a, b) => Number(a.blockNumber) - Number(b.blockNumber));
+        const chunkSize = 100000n;
+        let startBlock = typeof fromBlock === 'bigint' ? fromBlock : 0n;
 
-      return logs;
+        const totalChunkCount = (latestBlock - startBlock) / chunkSize;
+        let chunkCount = 0;
+
+        while (startBlock <= latestBlock) {
+          const endBlock =
+            startBlock + chunkSize > latestBlock
+              ? latestBlock
+              : startBlock + chunkSize;
+
+          console.log(
+            `Processing ${chunkCount}/${totalChunkCount} (R: ${startBlock} <-> ${endBlock})`,
+          );
+
+          try {
+            const chunkLogs = await client.getLogs({
+              address: contract,
+              event,
+              fromBlock: startBlock,
+              toBlock: endBlock,
+            });
+
+            if (chunkLogs.length) {
+              console.log('Logs chunked ', chunkLogs.length);
+            }
+
+            allLogs.push(...chunkLogs);
+
+            startBlock = endBlock + 1n;
+            chunkCount++;
+          } catch (error) {
+            console.error(
+              `Error getting logs for block range ${startBlock}-${endBlock}: ${error}`,
+            );
+          }
+        }
+      } else {
+        const logs = await client.getLogs({
+          address: contract,
+          event,
+          fromBlock,
+        });
+
+        allLogs.push(...logs);
+      }
+
+      allLogs.sort((a, b) => Number(a.blockNumber) - Number(b.blockNumber));
+
+      return allLogs;
     } catch (error) {
       console.error('Error getting logs ' + error);
       return [];

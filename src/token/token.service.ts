@@ -22,11 +22,15 @@ import {
   SRG20_BUY_SIGNATURE,
   SRG20_SELL_SIGNATURE,
   SRG_CONTRACTS,
+  ETH_DECIMALS,
 } from '../../shared/constants';
-import { HistoricPrice, Srg20HourlyPrice } from './entities/token.types';
+import { SrgHourlyPrice, Srg20HourlyPrice } from './entities/token.types';
 import { SupabaseService } from 'src/supabase/supabase.service';
 import { Collection } from 'src/supabase/entities/collections.type';
-import { Srg20ExtractionPayload } from './entities/srg20-extraction.type';
+import {
+  Srg20ExtractionPayload,
+  SrgExtractionPayload,
+} from './entities/srg20-extraction.type';
 import { findClosestTimeFrame } from 'shared/utils';
 
 const BATCH_SIZE = 100;
@@ -40,7 +44,10 @@ export class TokenService {
     private supabaseService: SupabaseService,
   ) {}
 
+  /////////////////////////
   // READ
+  /////////////////////////
+
   public async getSrg20PriceHistory(contract: Address): Promise<number[][]> {
     const history = await this.supabaseService.getTokenHistory(contract);
 
@@ -77,20 +84,237 @@ export class TokenService {
     return await this.supabaseService.getTokenHistory(contract);
   }
 
-  public async getSrgHistory(): Promise<HistoricPrice[]> {
-    return await this.supabaseService.getAll<HistoricPrice>(
-      Collection.SURGE_HISTORICAL_DATA,
+  public async getSrgHistory(chain: ChainName): Promise<SrgHourlyPrice[]> {
+    return await this.supabaseService.getAll<SrgHourlyPrice>(
+      Collection.SRG_PRICE_HISTORY,
+      {
+        column: 'chain',
+        value: chain,
+      },
     );
   }
 
-  // EXTRACT
+  /////////////////////////
+  // EXTRACTION
+  /////////////////////////
+
+  /////////////////////////
+  // MAIN $SRG EXTRACTION
+  /////////////////////////
+
+  public async extractSrgHistory({
+    chain,
+    fromTimestamp,
+  }: SrgExtractionPayload): Promise<void> {
+    try {
+      const contract = SRG_CONTRACTS[chain];
+
+      const hourlyTimestamps = await this.buildHourlyTimeframe({
+        chain,
+        contract,
+        fromTimestamp,
+      }); //
+
+      const clients = this.explorerService.getClients(chain);
+      const chunkSize = Math.ceil(hourlyTimestamps.length / clients.length);
+
+      for (const clientNode of clients) {
+        this.extractSaveSrgHistoryChunk({
+          clientNode,
+          chain,
+          contract,
+          hourlyTimestamps: hourlyTimestamps.splice(0, chunkSize),
+        })
+          .then((batchResults) => {
+            // Volume for $SRG ?
+          })
+          .catch((error) => {
+            this.logger.error(
+              `Error extraction data (${clientNode.uid}): `,
+              error,
+            );
+          })
+          .finally(() => {
+            this.logger.log(`Client ${clientNode.uid} finished job!`);
+          });
+      }
+    } catch (error) {
+      console.error('Error extracting $SRG: ', error);
+    }
+  }
+
+  private async extractSaveSrgHistoryChunk({
+    clientNode,
+    chain,
+    contract,
+    hourlyTimestamps,
+  }: {
+    contract: Address;
+    clientNode: PublicClient;
+    chain: ChainName;
+    hourlyTimestamps: number[];
+  }): Promise<void> {
+    const BATCH_SIZE = 50;
+    const MAX_RETRIES = 5;
+
+    const totalBatches = Math.ceil(hourlyTimestamps.length / BATCH_SIZE);
+
+    let batchCounter = 1;
+    let retries = 0;
+
+    let batch: number[] = [];
+
+    while (hourlyTimestamps.length > 0) {
+      this.logger.log(
+        `Processing batch ${batchCounter}/${totalBatches} (${hourlyTimestamps.length} entries remaining)`,
+      );
+
+      if (retries == 0) {
+        batch = hourlyTimestamps.splice(0, BATCH_SIZE);
+      }
+      try {
+        const results: Omit<SrgHourlyPrice, 'id'>[] = await Promise.all(
+          batch.map(async (timestamp) => {
+            return await this.extractSrgPrice({
+              clientNode,
+              timestamp,
+              chain,
+              contract,
+            });
+          }),
+        );
+
+        await this.supabaseService.batchUpsert<SrgHourlyPrice>({
+          collection: Collection.SRG_PRICE_HISTORY,
+          items: results,
+          options: {
+            batchSize: BATCH_SIZE,
+            onConflict: 'token_address,chain,timestamp',
+            ignoreDuplicates: false,
+          },
+        });
+
+        retries = 0;
+        batchCounter++;
+      } catch (error) {
+        retries++;
+
+        if (retries > MAX_RETRIES) {
+          console.error(`Failed after ${MAX_RETRIES} retries:`, error);
+          throw error;
+        }
+
+        const delay = Math.pow(2, retries) * 1000 + Math.random() * 1000;
+
+        this.logger.warn(
+          `Retry attempt ${retries}/${MAX_RETRIES} after error: ${JSON.stringify(error).slice(0, 200)}. Waiting ${delay}ms...`,
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  private async extractSrgPrice({
+    timestamp,
+    chain,
+    contract,
+    clientNode,
+  }: {
+    timestamp: number;
+    chain: ChainName;
+    contract: Address;
+    clientNode?: PublicClient;
+  }): Promise<any> {
+    const closestBlockNumber =
+      await this.explorerService.getBlockNumberByTimestamp({
+        chain,
+        timestamp,
+      });
+
+    const history: SrgHourlyPrice = {
+      timestamp,
+      chain,
+      token_address: contract,
+      real_native_balance: 0,
+      internal_native_balance: 0,
+      native_price_usd: 0,
+      srg_balance: 0,
+      internal_srg_price_usd: 0,
+      real_price_usd: 0,
+    };
+
+    if (!closestBlockNumber) return history;
+
+    const rawNativeBalance = await this.explorerService.getBalance({
+      chain,
+      contract,
+      blockNumber: closestBlockNumber,
+    });
+
+    const nativeBalance = Number(formatUnits(rawNativeBalance, ETH_DECIMALS));
+
+    const rawSrgBalance: bigint = await this.explorerService.readContract({
+      clientNode,
+      chain,
+      contract,
+      abi: IERC20_ABI,
+      functionName: 'balanceOf',
+      blockNumber: closestBlockNumber,
+      args: [contract],
+    });
+
+    const srgBalance = Number(formatUnits(rawSrgBalance, SRG_DECIMALS));
+
+    const srgLiquidity: bigint = await this.explorerService.readContract({
+      clientNode,
+      chain,
+      contract,
+      abi: SRG_ABI,
+      functionName: 'getLiquidity',
+      blockNumber: closestBlockNumber,
+    });
+
+    const internalNativeBalance = Number(
+      formatUnits(srgLiquidity, ETH_DECIMALS),
+    );
+
+    const nativePriceUsd = await this.getNativePriceUsd(
+      chain,
+      closestBlockNumber,
+    );
+
+    // 6. Calculate price of $SRG units in ETH/BNB using the tracked balance
+    const internalSrgPriceNative = internalNativeBalance / srgBalance;
+    // 7. Calculate $SRG internal unit price in USD
+    const internalSrgPriceUsd = internalSrgPriceNative * nativePriceUsd;
+
+    // 8. Calculate price of $SRG units in ETH/BNB using real balance
+    const realSrgPriceNative = nativeBalance / srgBalance;
+    // 9. Calculate $SRG unit price in USD
+    const realSrgPriceUsd = realSrgPriceNative * nativePriceUsd;
+
+    history.real_native_balance = nativeBalance;
+    history.internal_native_balance = internalNativeBalance;
+    history.native_price_usd = nativePriceUsd;
+    history.srg_balance = Number(srgBalance);
+    history.internal_srg_price_usd = internalSrgPriceUsd;
+    history.real_price_usd = realSrgPriceUsd;
+
+    return history;
+  }
+
+  /////////////////////////
+  // SRG20s EXTRACTION
+  /////////////////////////
+
   public async extractSrg20History({
     contract,
     chain,
     fromTimestamp,
   }: Srg20ExtractionPayload): Promise<void> {
     try {
-      const srgHistory = await this.getSrgHistory();
+      const srgHistory = await this.getSrgHistory(chain);
 
       if (!srgHistory) {
         throw new Error('Unable to fetch $SRG price history');
@@ -119,7 +343,7 @@ export class TokenService {
       const chunkSize = Math.ceil(hourlyTimestamps.length / clients.length);
 
       for (const clientNode of clients) {
-        this.extractSaveHistoryChunk({
+        this.extractSaveSrg20HistoryChunk({
           clientNode,
           chain,
           contract,
@@ -144,7 +368,7 @@ export class TokenService {
     }
   }
 
-  private async extractSaveHistoryChunk({
+  private async extractSaveSrg20HistoryChunk({
     clientNode,
     chain,
     contract,
@@ -154,7 +378,7 @@ export class TokenService {
     clientNode: PublicClient;
     chain: ChainName;
     contract: Address;
-    srgHistory: HistoricPrice[];
+    srgHistory: SrgHourlyPrice[];
     hourlyTimestamps: number[];
   }): Promise<Omit<Srg20HourlyPrice, 'id'>[]> {
     const MAX_RETRIES = 5;
@@ -197,7 +421,6 @@ export class TokenService {
               batchSize: BATCH_SIZE,
               onConflict: 'token_address,chain,timestamp',
               ignoreDuplicates: false,
-              progressLabel: 'hourly prices',
             },
           });
 
@@ -226,47 +449,6 @@ export class TokenService {
     return results;
   }
 
-  private async extractAppendVolume(
-    history: Srg20HourlyPrice[],
-    chain: ChainName,
-  ): Promise<void> {
-    const contract = history[0].token_address;
-
-    this.logger.log(
-      `Appending volume and saving ${history.length} extracted results for token ${contract}..`,
-    );
-
-    const priceHistory = history.map((metrics) => [
-      metrics.timestamp,
-      metrics.real_price_usd,
-    ]);
-
-    const volumeHistory = await this.extractSrg20VolumeHistory({
-      contract,
-      chain,
-      history: priceHistory,
-    });
-
-    const completedResults = history.map((hourly) => {
-      const [_, volume] = findClosestTimeFrame(hourly.timestamp, volumeHistory);
-
-      return { ...hourly, volume };
-    });
-
-    await this.supabaseService.batchUpsert<Srg20HourlyPrice>({
-      collection: Collection.TOKEN_PRICE_HISTORY,
-      items: completedResults,
-      options: {
-        batchSize: BATCH_SIZE,
-        onConflict: 'token_address,chain,timestamp',
-        ignoreDuplicates: false,
-        progressLabel: 'hourly prices',
-      },
-    });
-
-    this.logger.log(`Saved ${history.length} results!`);
-  }
-
   private async extractSrg20Price({
     srgHistory,
     timestamp,
@@ -274,7 +456,7 @@ export class TokenService {
     contract,
     clientNode,
   }: {
-    srgHistory: HistoricPrice[];
+    srgHistory: SrgHourlyPrice[];
     timestamp: number;
     chain: ChainName;
     contract: Address;
@@ -350,6 +532,51 @@ export class TokenService {
       srgBalance * srgPrice.real_price_usd + srg20Balance * realSrg20PriceUsd;
 
     return history;
+  }
+
+  /////////////////////////
+  // VOLUME EXTRACTION
+  /////////////////////////
+
+  private async extractAppendVolume(
+    history: Srg20HourlyPrice[],
+    chain: ChainName,
+  ): Promise<void> {
+    const contract = history[0].token_address;
+
+    this.logger.log(
+      `Appending volume and saving ${history.length} extracted results for token ${contract}..`,
+    );
+
+    const priceHistory = history.map((metrics) => [
+      metrics.timestamp,
+      metrics.real_price_usd,
+    ]);
+
+    const volumeHistory = await this.extractSrg20VolumeHistory({
+      contract,
+      chain,
+      history: priceHistory,
+    });
+
+    const completedResults = history.map((hourly) => {
+      const [_, volume] = findClosestTimeFrame(hourly.timestamp, volumeHistory);
+
+      return { ...hourly, volume };
+    });
+
+    await this.supabaseService.batchUpsert<Srg20HourlyPrice>({
+      collection: Collection.TOKEN_PRICE_HISTORY,
+      items: completedResults,
+      options: {
+        batchSize: BATCH_SIZE,
+        onConflict: 'token_address,chain,timestamp',
+        ignoreDuplicates: false,
+        progressLabel: 'hourly prices',
+      },
+    });
+
+    this.logger.log(`Saved ${history.length} results!`);
   }
 
   public async extractSrg20VolumeHistory({
@@ -456,7 +683,10 @@ export class TokenService {
     await this.extractAppendVolume(history, chain);
   }
 
+  /////////////////////////
   // HELPERS
+  /////////////////////////
+
   public async getSrgCreationBlock(
     chain: ChainName,
     contract: Address,
@@ -478,7 +708,7 @@ export class TokenService {
     return block;
   }
 
-  public async getEthPriceUsd(
+  public async getNativePriceUsd(
     chain: ChainName,
     blockNumber?: bigint,
   ): Promise<any> {
@@ -515,7 +745,6 @@ export class TokenService {
       chain,
       contract,
       event: TRANSFER_EVENT,
-      fromBlock: 'earliest',
     });
 
     if (!logs) return [];

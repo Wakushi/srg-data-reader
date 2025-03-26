@@ -1,13 +1,15 @@
 import { ChainName } from 'shared/chains';
 import { Address } from 'viem';
 
-export type HistoricPrice = {
+export type SrgHourlyPrice = {
   id?: number;
   timestamp: number;
+  token_address: Address;
+  chain: ChainName;
   real_native_balance: number;
   internal_native_balance: number;
   native_price_usd: number;
-  srg_balance: string;
+  srg_balance: number;
   internal_srg_price_usd: number;
   real_price_usd: number;
 };

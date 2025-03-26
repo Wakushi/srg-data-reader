@@ -22,7 +22,7 @@ import { SupabaseModule } from './supabase/supabase.module';
           `https://arb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
         ],
         [ChainName.BSC]: [
-          `https://bnb-mainnet.g.alchemy.com/v2/v2/${process.env.ALCHEMY_API_KEY}`,
+          `https://bnb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
         ],
       },
       apiKey: process.env.ALCHEMY_API_KEY,

@@ -9,8 +9,10 @@ import {
 import { TokenService } from './token.service';
 import { Address } from 'viem';
 import { ChainName } from 'shared/chains';
-import { Collection } from 'src/supabase/entities/collections.type';
-import { Srg20ExtractionPayload } from './entities/srg20-extraction.type';
+import {
+  Srg20ExtractionPayload,
+  SrgExtractionPayload,
+} from './entities/srg20-extraction.type';
 import { ONE_HOUR_IN_SECOND } from 'shared/constants';
 
 @Controller('token')
@@ -23,22 +25,22 @@ export class TokenController {
   }
 
   @Get('price/:contract')
-  async getTokenPriceHistory(@Param() { contract }: { contract: Address }) {
+  async getSrg20PriceHistory(@Param() { contract }: { contract: Address }) {
     return await this.tokenService.getSrg20PriceHistory(contract);
   }
 
   @Get('liquidity/:contract')
-  async getTokenLiquidityHistory(@Param() { contract }: { contract: Address }) {
+  async getSrg20LiquidityHistory(@Param() { contract }: { contract: Address }) {
     return await this.tokenService.getSrg20LiquidityHistory(contract);
   }
 
   @Get('volume/:contract')
-  async getTokenVolumeHistory(@Param() { contract }: { contract: Address }) {
+  async getSrg20VolumeHistory(@Param() { contract }: { contract: Address }) {
     return await this.tokenService.getSrg20VolumeHistory(contract);
   }
 
-  @Post('extract')
-  async extractTokenHistory(
+  @Post('extract-srg20')
+  async extractSrg20History(
     @Body()
     { token, chain }: { token: Address; chain: ChainName },
   ) {
@@ -73,6 +75,30 @@ export class TokenController {
     await this.tokenService.extractSrg20History(extractionPayload);
   }
 
+  @Post('extract-srg')
+  async extractSrgHistory(
+    @Body()
+    { chain }: { chain: ChainName },
+  ) {
+    const extractionPayload: SrgExtractionPayload = {
+      chain,
+    };
+
+    const priceHistory = await this.tokenService.getSrgHistory(chain);
+
+    if (priceHistory && priceHistory.length) {
+      priceHistory.sort((a, b) => b.timestamp - a.timestamp);
+      const latestPriceAt = priceHistory[0].timestamp;
+      const extractFrom = latestPriceAt + ONE_HOUR_IN_SECOND;
+
+      if (extractFrom >= Date.now()) return;
+
+      extractionPayload.fromTimestamp = extractFrom;
+    }
+
+    await this.tokenService.extractSrgHistory(extractionPayload);
+  }
+
   @Post('sync-volume')
   async syncVolumeHistory(
     @Body()
@@ -81,9 +107,9 @@ export class TokenController {
     await this.tokenService.syncVolumeHistory(token, chain);
   }
 
-  @Get('surge')
-  async getSrgHistory() {
-    const history = await this.tokenService.getSrgHistory();
+  @Get('srg/:chain')
+  async getSrgHistory(@Param() { chain }: { chain: ChainName }) {
+    const history = await this.tokenService.getSrgHistory(chain);
     return history;
   }
 

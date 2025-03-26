@@ -76,9 +76,18 @@ export class SupabaseService {
     }
   }
 
-  public async getAll<T extends object>(collection: Collection): Promise<T[]> {
+  public async getAll<T extends object>(
+    collection: Collection,
+    filter?: { column: string; value: any },
+  ): Promise<T[]> {
     try {
-      const { data, error } = await this.client.from(collection).select('*');
+      let query = this.client.from(collection).select('*');
+
+      if (filter) {
+        query = query.eq(filter.column, filter.value);
+      }
+
+      const { data, error } = await query;
 
       if (error) {
         throw new SupabaseError(
