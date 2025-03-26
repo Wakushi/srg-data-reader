@@ -1,4 +1,4 @@
-import { ChainName } from 'entities/chains';
+import { ChainName } from 'shared/chains';
 import { Chain } from 'viem';
 import { arbitrum, bsc, mainnet } from 'viem/chains';
 

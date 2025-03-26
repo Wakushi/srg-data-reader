@@ -1,5 +1,5 @@
 import { DynamicModule, Module } from '@nestjs/common';
-import { RpcUrlConfig } from 'entities/rpc-url-config.type';
+import { RpcUrlConfig } from 'shared/rpc-url-config.type';
 import { ExplorerService } from './explorer.service';
 
 @Module({})

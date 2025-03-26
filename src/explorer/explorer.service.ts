@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ChainName } from 'entities/chains';
-import { RpcUrlConfig } from 'entities/rpc-url-config.type';
-import { getChainByName } from 'lib/utils';
+import { ChainName } from 'shared/chains';
+import { RpcUrlConfig } from 'shared/rpc-url-config.type';
+import { getChainByName } from 'shared/utils';
 import { LogEvent } from 'src/token/entities/token.types';
 import {
   Abi,

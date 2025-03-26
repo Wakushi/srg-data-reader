@@ -8,10 +8,10 @@ import {
 } from '@nestjs/common';
 import { TokenService } from './token.service';
 import { Address } from 'viem';
-import { ChainName } from 'entities/chains';
+import { ChainName } from 'shared/chains';
 import { Collection } from 'src/supabase/entities/collections.type';
 import { Srg20ExtractionPayload } from './entities/srg20-extraction.type';
-import { ONE_HOUR_IN_SECOND } from 'lib/constants';
+import { ONE_HOUR_IN_SECOND } from 'shared/constants';
 
 @Controller('token')
 export class TokenController {

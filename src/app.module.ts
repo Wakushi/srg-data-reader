@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TokenModule } from './token/token.module';
 import { ExplorerModule } from './explorer/explorer.module';
-import { ChainName } from 'entities/chains';
+import { ChainName } from 'shared/chains';
 import { envSchema } from 'config/env.validation';
 import { ConfigModule } from '@nestjs/config';
 import { SupabaseModule } from './supabase/supabase.module';

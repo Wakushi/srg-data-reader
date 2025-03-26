@@ -1,4 +1,4 @@
-import { ChainName } from 'entities/chains';
+import { ChainName } from 'shared/chains';
 import { AbiEvent, Address, keccak256, toBytes } from 'viem';
 
 export const ONE_HOUR_IN_SECOND = 60 * 60;

@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ChainName } from 'entities/chains';
+import { ChainName } from 'shared/chains';
 import { ExplorerService } from 'src/explorer/explorer.service';
 import {
   Abi,
@@ -22,12 +22,12 @@ import {
   SRG20_BUY_SIGNATURE,
   SRG20_SELL_SIGNATURE,
   SRG_CONTRACTS,
-} from '../../lib/constants';
+} from '../../shared/constants';
 import { HistoricPrice, Srg20HourlyPrice } from './entities/token.types';
 import { SupabaseService } from 'src/supabase/supabase.service';
 import { Collection } from 'src/supabase/entities/collections.type';
 import { Srg20ExtractionPayload } from './entities/srg20-extraction.type';
-import { findClosestTimeFrame } from 'lib/utils';
+import { findClosestTimeFrame } from 'shared/utils';
 
 const BATCH_SIZE = 100;
 

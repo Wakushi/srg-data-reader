@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Collection } from './entities/collections.type';
-import { ONE_HOUR_IN_SECOND } from 'lib/constants';
+import { ONE_HOUR_IN_SECOND } from 'shared/constants';
 import { Srg20HourlyPrice } from 'src/token/entities/token.types';
 
 @Injectable()

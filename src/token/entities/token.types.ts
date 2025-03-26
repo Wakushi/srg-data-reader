@@ -1,4 +1,4 @@
-import { ChainName } from 'entities/chains';
+import { ChainName } from 'shared/chains';
 import { Address } from 'viem';
 
 export type HistoricPrice = {
