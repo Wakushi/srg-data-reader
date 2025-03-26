@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ChainName } from 'entities/chains';
 import { RpcUrlConfig } from 'entities/rpc-url-config.type';
+import { getChainByName } from 'lib/utils';
 import { LogEvent } from 'src/token/entities/token.types';
 import {
   Abi,
@@ -10,12 +11,11 @@ import {
   BlockTag,
   createPublicClient,
   GetBalanceParameters,
+  GetCodeReturnType,
   http,
-  Log,
   PublicClient,
   ReadContractParameters,
 } from 'viem';
-import { mainnet } from 'viem/chains';
 
 @Injectable()
 export class ExplorerService {
@@ -24,7 +24,7 @@ export class ExplorerService {
     private readonly config: { rpcUrls: RpcUrlConfig; apiKey: string },
   ) {}
 
-  private _clients: Map<ChainName, PublicClient> = new Map();
+  private _clientsByChain: Map<ChainName, PublicClient[]> = new Map();
 
   public async getBalance({
     chain,
@@ -99,12 +99,17 @@ export class ExplorerService {
     }
   }
 
-  public async getBlockNumberByTimestamp(
-    chain: ChainName,
-    timestamp: number,
+  public async getBlockNumberByTimestamp({
+    chain,
+    timestamp,
     maxRetries = 5,
     initialDelay = 1000,
-  ): Promise<any> {
+  }: {
+    chain: ChainName;
+    timestamp: number;
+    maxRetries?: number;
+    initialDelay?: number;
+  }): Promise<any> {
     const alchemyChain: Record<ChainName, string> = {
       [ChainName.ETHEREUM]: 'eth-mainnet',
       [ChainName.ARBITRUM]: 'arb-mainnet',
@@ -121,8 +126,6 @@ export class ExplorerService {
         );
 
         if (!response.ok) {
-          const errorData = await response.json();
-
           if (response.status === 429) {
             throw new Error('Rate limit exceeded');
           }
@@ -165,6 +168,7 @@ export class ExplorerService {
     functionName,
     blockNumber,
     args,
+    clientNode,
   }: {
     chain: ChainName;
     contract: Address;
@@ -172,15 +176,16 @@ export class ExplorerService {
     functionName: string;
     blockNumber?: bigint;
     args?: any;
+    clientNode?: PublicClient;
   }): Promise<any> {
-    try {
-      const client = this.getClient(chain);
+    const payload: ReadContractParameters = {
+      address: contract,
+      abi,
+      functionName,
+    };
 
-      const payload: ReadContractParameters = {
-        address: contract,
-        abi,
-        functionName,
-      };
+    try {
+      const client = clientNode ? clientNode : this.getClient(chain);
 
       if (blockNumber) {
         payload.blockNumber = blockNumber;
@@ -194,17 +199,17 @@ export class ExplorerService {
 
       return data;
     } catch (error) {
-      throw new error(`Error reading contract with ${functionName}()` + error);
+      const errorMsg = `Error reading contract with ${functionName}() payload ${JSON.stringify(payload)}`;
+      throw new Error(errorMsg + ' ' + error);
     }
   }
 
-  public async isContract(address: string, chain: ChainName): Promise<boolean> {
+  public async isContract(
+    address: Address,
+    chain: ChainName,
+  ): Promise<boolean> {
     try {
-      const client = this.getClient(chain);
-
-      const bytecode = await client.getCode({
-        address: address as `0x${string}`,
-      });
+      const bytecode = await this.getBytecode(address, chain);
 
       return bytecode ? bytecode !== '0x' : false;
     } catch (error) {
@@ -212,20 +217,57 @@ export class ExplorerService {
     }
   }
 
-  private getClient(chain: ChainName): PublicClient {
-    const client = this._clients.get(chain);
-
-    if (client) return client;
-
+  public async getBytecode(
+    address: Address,
+    chain: ChainName,
+  ): Promise<GetCodeReturnType> {
     try {
-      const newClient = createPublicClient({
-        chain: mainnet,
-        transport: http(this.config.rpcUrls[chain]),
+      const client = this.getClient(chain);
+
+      const bytecode = await client.getCode({
+        address: address as `0x${string}`,
       });
 
-      this._clients.set(chain, newClient);
+      return bytecode;
+    } catch (error) {
+      console.log('Error getting byte code: ', error);
+    }
+  }
 
-      return newClient;
+  public getClient(chain: ChainName): PublicClient {
+    const clients = this.getClients(chain);
+
+    if (!clients || !clients.length) {
+      throw new Error('No clients found for chain ' + chain);
+    }
+
+    return clients[0];
+  }
+
+  public getClients(chainName: ChainName): PublicClient[] {
+    const clients = this._clientsByChain.get(chainName);
+
+    if (clients) return clients;
+
+    try {
+      const rpcUrls = this.config.rpcUrls[chainName];
+
+      if (!rpcUrls || !rpcUrls.length) {
+        throw new Error('Missing RPCs for chain ' + chainName);
+      }
+
+      const chain = getChainByName(chainName);
+
+      const newClients = rpcUrls.map((url) => {
+        return createPublicClient({
+          chain,
+          transport: http(url),
+        });
+      });
+
+      this._clientsByChain.set(chainName, newClients);
+
+      return newClients;
     } catch (error) {
       throw new Error('Unable to connect to RPC client. ' + error);
     }

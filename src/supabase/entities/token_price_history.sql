@@ -10,6 +10,7 @@ CREATE TABLE token_price_history (
   internal_liquidity_usd NUMERIC NOT NULL,
   real_liquidity_usd NUMERIC NOT NULL,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+  volume NUMERIC NOT NULL
   UNIQUE(token_address, chain, timestamp)
 );
 

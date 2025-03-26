@@ -23,6 +23,7 @@ export type Srg20HourlyPrice = {
   real_price_usd: number;
   internal_liquidity_usd: number;
   real_liquidity_usd: number;
+  volume: number;
 };
 
 export interface LogEvent {

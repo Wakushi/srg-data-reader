@@ -1,9 +1,22 @@
-import { AbiEvent } from 'viem';
+import { ChainName } from 'entities/chains';
+import { AbiEvent, Address, keccak256, toBytes } from 'viem';
 
 export const ONE_HOUR_IN_SECOND = 60 * 60;
 
 export const WETH_USDC_POOL = '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640';
-export const SRG_ETH = '0xcD682EF09d07668d49A8103ddD65Ff54AebFbfDe';
+
+export const SRG_CONTRACTS: Record<ChainName, Address> = {
+  [ChainName.ETHEREUM]: '0xcD682EF09d07668d49A8103ddD65Ff54AebFbfDe',
+  [ChainName.ARBITRUM]: '0x31ad8255cb8e428e8b0f6ab6a6f44804642720af',
+  [ChainName.BSC]: '0x9f19c8e321bD14345b797d43E01f0eED030F5Bff',
+};
+
+export const SRG20_BUY_SIGNATURE = keccak256(
+  toBytes('_buy(uint256,uint256,uint256)'),
+);
+export const SRG20_SELL_SIGNATURE = keccak256(
+  toBytes('_sell(uint256,uint256,uint256)'),
+);
 
 export const SRG_DECIMALS = 9;
 export const ETH_DECIMALS = 18;

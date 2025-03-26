@@ -1,11 +1,13 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Collection } from './entities/collections.type';
-import { ONE_HOUR_IN_SECOND } from 'src/lib/constants';
+import { ONE_HOUR_IN_SECOND } from 'lib/constants';
 import { Srg20HourlyPrice } from 'src/token/entities/token.types';
 
 @Injectable()
 export class SupabaseService {
+  private readonly logger = new Logger(SupabaseService.name);
+
   private _client: SupabaseClient<any, 'public', any>;
 
   private readonly BATCH_SIZE = 100;
@@ -41,7 +43,7 @@ export class SupabaseService {
 
       return data as Srg20HourlyPrice[];
     } catch (error) {
-      console.error('Error in getTokenHistory:', error);
+      this.logger.error('Error in getTokenHistory:', error);
       return [];
     }
   }
@@ -69,49 +71,14 @@ export class SupabaseService {
 
       return data[0] as T;
     } catch (error) {
-      console.error('Error in getByTimestampSingleQuery:', error);
+      this.logger.error('Error in getByTimestampSingleQuery:', error);
       return null;
     }
   }
 
-  public async getAll<T extends object>({
-    collection,
-    options = {},
-  }: {
-    collection: Collection;
-    options?: {
-      limit?: number;
-      offset?: number;
-      orderBy?: { column: string; ascending?: boolean };
-      filters?: Array<{ column: string; operator: string; value: any }>;
-    };
-  }): Promise<T[]> {
+  public async getAll<T extends object>(collection: Collection): Promise<T[]> {
     try {
-      const { limit, offset, orderBy, filters } = options;
-
-      let query = this.client.from(collection).select('*');
-
-      if (filters && filters.length > 0) {
-        filters.forEach((filter) => {
-          query = query.filter(filter.column, filter.operator, filter.value);
-        });
-      }
-
-      if (orderBy) {
-        query = query.order(orderBy.column, {
-          ascending: orderBy.ascending ?? true,
-        });
-      }
-
-      if (limit !== undefined) {
-        query = query.limit(limit);
-      }
-
-      if (offset !== undefined) {
-        query = query.range(offset, offset + (limit || 0) - 1);
-      }
-
-      const { data, error } = await query;
+      const { data, error } = await this.client.from(collection).select('*');
 
       if (error) {
         throw new SupabaseError(
@@ -122,18 +89,18 @@ export class SupabaseService {
 
       return data as T[];
     } catch (error) {
-      console.error(`Error fetching data from ${collection}:`, error);
+      this.logger.error(`Error fetching data from ${collection}:`, error);
       throw error;
     }
   }
 
-  public async batchInsert<T extends object>({
+  public async batchUpsert<T extends object>({
     collection,
     items,
     options = {},
   }: {
     collection: Collection;
-    items: Omit<T, 'id'>[];
+    items: T[];
     options: {
       batchSize?: number;
       progressLabel?: string;
@@ -150,7 +117,7 @@ export class SupabaseService {
         const currentBatch = i / batchSize + 1;
         const totalBatches = Math.ceil(items.length / batchSize);
 
-        console.log(
+        this.logger.log(
           `Inserting ${progressLabel} batch ${currentBatch} of ${totalBatches}`,
         );
 
@@ -171,7 +138,7 @@ export class SupabaseService {
 
       return allInsertedData;
     } catch (error) {
-      console.error(`Error in batch insert for ${collection}:`, error);
+      this.logger.error(`Error in batch insert for ${collection}:`, error);
       throw error;
     }
   }
@@ -196,7 +163,7 @@ export class SupabaseService {
 
       return data;
     } catch (error) {
-      console.error(`Error inserting single item in ${collection}:`, error);
+      this.logger.error(`Error inserting single item in ${collection}:`, error);
       throw error;
     }
   }
