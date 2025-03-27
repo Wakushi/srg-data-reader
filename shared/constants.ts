@@ -19,6 +19,12 @@ export const SRG_CONTRACTS: Record<ChainName, Address> = {
   [ChainName.BSC]: '0x9f19c8e321bD14345b797d43E01f0eED030F5Bff',
 };
 
+export const CHAIN_BLOCK_TIMES: Record<ChainName, number> = {
+  [ChainName.ETHEREUM]: 12,
+  [ChainName.BSC]: 3,
+  [ChainName.ARBITRUM]: 1,
+};
+
 export const SRG20_BUY_SIGNATURE = keccak256(
   toBytes('_buy(uint256,uint256,uint256)'),
 );

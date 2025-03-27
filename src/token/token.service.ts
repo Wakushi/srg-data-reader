@@ -85,13 +85,15 @@ export class TokenService {
   }
 
   public async getSrgHistory(chain: ChainName): Promise<SrgHourlyPrice[]> {
-    return await this.supabaseService.getAll<SrgHourlyPrice>(
+    const history = await this.supabaseService.getAll<SrgHourlyPrice>(
       Collection.SRG_PRICE_HISTORY,
       {
         column: 'chain',
         value: chain,
       },
     );
+
+    return history.sort((a, b) => a.timestamp - b.timestamp);
   }
 
   /////////////////////////
@@ -116,7 +118,7 @@ export class TokenService {
       fromBlockNumber,
     });
 
-    let batchCounter = 1; 
+    let batchCounter = 1;
     let batch: number[] = [];
 
     let rpcClient = this.rpcClientService.getClient(chain);
@@ -127,6 +129,7 @@ export class TokenService {
       );
 
       batch = hourlyTimestamps.splice(0, rpcClient.batchSize);
+      batch.sort((a, b) => a - b);
 
       try {
         const results: Omit<SrgHourlyPrice, 'id'>[] = await Promise.all(
@@ -187,11 +190,11 @@ export class TokenService {
     contract: Address;
     rpcClient: RpcClient;
   }): Promise<any> {
-    const closestBlockNumber =
-      await this.explorerService.getBlockNumberByTimestamp({
-        chain,
-        timestamp,
-      });
+    const closestBlockNumber = await this.explorerService.findNearestBlock({
+      chain,
+      targetTimestamp: timestamp,
+      rpcClient,
+    });
 
     const history: SrgHourlyPrice = {
       timestamp,
@@ -303,26 +306,20 @@ export class TokenService {
       const hourlyTimestamps = await this.buildHourlyTimeframe({
         chain,
         contract,
-        fromTimestamp,
+        rpcClient,
+        fromTimestamp: fromTimestamp || srgHistory[0].timestamp,
       });
 
-      const MAX_RETRIES = 5;
-      const totalBatches = Math.ceil(hourlyTimestamps.length / BATCH_SIZE);
-
       let batchCounter = 1;
-      let retries = 0;
-
       let batch: number[] = [];
-      const results: Srg20HourlyPrice[] = [];
 
-      while (hourlyTimestamps.length > 0 && retries <= MAX_RETRIES) {
+      while (hourlyTimestamps.length > 0) {
         this.logger.log(
-          `RPC ${rpcClient.client.transport.name} - Processing batch ${batchCounter}/${totalBatches} (${hourlyTimestamps.length} entries remaining)`,
+          `Client: ${rpcClient.client.transport.name} | Max size ${rpcClient.batchSize} | (${hourlyTimestamps.length} entries remaining)`,
         );
 
-        if (retries == 0) {
-          batch = hourlyTimestamps.splice(0, BATCH_SIZE);
-        }
+        batch = hourlyTimestamps.splice(0, rpcClient.batchSize);
+        batch.sort((a, b) => a - b);
 
         try {
           const batchResults: Omit<Srg20HourlyPrice, 'id'>[] =
@@ -338,33 +335,43 @@ export class TokenService {
               }),
             );
 
-          const insertedResults =
-            await this.supabaseService.batchUpsert<Srg20HourlyPrice>({
-              collection: Collection.TOKEN_PRICE_HISTORY,
-              items: batchResults,
-              options: {
-                batchSize: BATCH_SIZE,
-                onConflict: 'token_address,chain,timestamp',
-                ignoreDuplicates: false,
-              },
-            });
+          const filteredResults = batchResults.filter(
+            (result) => result.token_balance,
+          );
 
-          results.push(...insertedResults);
+          await this.supabaseService.batchUpsert<Srg20HourlyPrice>({
+            collection: Collection.TOKEN_PRICE_HISTORY,
+            items: filteredResults,
+            options: {
+              batchSize: BATCH_SIZE,
+              onConflict: 'token_address,chain,timestamp',
+              ignoreDuplicates: false,
+            },
+          });
 
-          retries = 0;
+          this.rpcClientService.recordSuccess(rpcClient);
+
           batchCounter++;
         } catch (error) {
-          retries++;
+          const delay = Math.random() * 100 + 1000;
+          const errorCode =
+            error?.code || error?.cause?.cause?.code || error.status || null;
 
-          if (retries > MAX_RETRIES) {
-            console.error(`Failed after ${MAX_RETRIES} retries:`, error);
-            throw error;
+          if (
+            errorCode === ALCHEMY_RATE_LIMIT_ERROR_CODE ||
+            errorCode === QUICK_NODE_RATE_LIMIT_ERROR_CODE
+          ) {
+            this.logger.log(
+              `${rpcClient.client.transport.name} failed (${errorCode}) | Waiting ${delay}ms...`,
+            );
+
+            await new Promise((resolve) => setTimeout(resolve, delay));
           }
 
-          rpcClient = this.rpcClientService.getClient(chain);
+          this.rpcClientService.recordFailure(rpcClient);
 
-          const delay = Math.pow(2, retries) * 1000 + Math.random() * 1000;
-          await new Promise((resolve) => setTimeout(resolve, delay));
+          hourlyTimestamps.push(...batch);
+          rpcClient = this.rpcClientService.getClient(chain);
         }
       }
     } catch (error) {
@@ -385,11 +392,11 @@ export class TokenService {
     contract: Address;
     rpcClient: RpcClient;
   }): Promise<Srg20HourlyPrice> {
-    const closestBlockNumber =
-      await this.explorerService.getBlockNumberByTimestamp({
-        chain,
-        timestamp,
-      });
+    const closestBlockNumber = await this.explorerService.findNearestBlock({
+      chain,
+      targetTimestamp: timestamp,
+      rpcClient,
+    });
 
     const history: Srg20HourlyPrice = {
       timestamp,
@@ -406,17 +413,29 @@ export class TokenService {
 
     if (!closestBlockNumber) return history;
 
-    const rawSrg20Balance: bigint = await this.explorerService.readContract({
+    const rawSrg20Balance: bigint | null =
+      await this.explorerService.readContract({
+        rpcClient,
+        chain,
+        contract,
+        abi: IERC20_ABI,
+        functionName: 'balanceOf',
+        blockNumber: closestBlockNumber,
+        args: [contract],
+      });
+
+    if (!rawSrg20Balance) return history;
+
+    const decimals: bigint = await this.explorerService.readContract({
       rpcClient,
       chain,
       contract,
-      abi: IERC20_ABI,
-      functionName: 'balanceOf',
+      abi: SRG_ABI,
+      functionName: 'decimals',
       blockNumber: closestBlockNumber,
-      args: [contract],
     });
 
-    const srg20Balance = Number(formatUnits(rawSrg20Balance, SRG_DECIMALS));
+    const srg20Balance = Number(formatUnits(rawSrg20Balance, Number(decimals)));
 
     const rawSrgBalance: bigint = await this.explorerService.readContract({
       rpcClient,
@@ -781,11 +800,13 @@ export class TokenService {
     contract,
     fromTimestamp,
     fromBlockNumber,
+    rpcClient,
   }: {
     chain: ChainName;
     contract: Address;
     fromTimestamp?: number;
     fromBlockNumber?: bigint;
+    rpcClient?: RpcClient;
   }): Promise<number[]> {
     const hourlyTimestamps: number[] = [];
 
@@ -825,13 +846,14 @@ export class TokenService {
     let firstBlock: Block | null = null;
 
     if (!fromTimestamp && !fromBlockNumber) {
-      firstBlock = await this.getSrgCreationBlock(chain, contract);
+      firstBlock = await this.getSrgCreationBlock({ chain, contract });
     }
 
-    if (fromTimestamp) {
-      const blockNumber = await this.explorerService.getBlockNumberByTimestamp({
+    if (fromTimestamp && rpcClient) {
+      const blockNumber = await this.explorerService.findNearestBlock({
         chain,
-        timestamp: fromTimestamp,
+        targetTimestamp: fromTimestamp,
+        rpcClient,
       });
 
       firstBlock = await this.explorerService.getBlock(chain, blockNumber);
@@ -860,10 +882,13 @@ export class TokenService {
     return hourlyTimestamps;
   }
 
-  private async getSrgCreationBlock(
-    chain: ChainName,
-    contract: Address,
-  ): Promise<Block | null> {
+  private async getSrgCreationBlock({
+    chain,
+    contract,
+  }: {
+    chain: ChainName;
+    contract: Address;
+  }): Promise<Block | null> {
     const transferLogs = await this.explorerService.getLogs({
       chain,
       contract: contract,

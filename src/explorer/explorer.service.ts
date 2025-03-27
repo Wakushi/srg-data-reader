@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ChainName } from 'shared/chains';
 import {
   ALCHEMY_RATE_LIMIT_ERROR_CODE,
+  CHAIN_BLOCK_TIMES,
   QUICK_NODE_RATE_LIMIT_ERROR_CODE,
 } from 'shared/constants';
 import { RpcClient, RpcClientService } from 'src/rpc-client/rpc-client.service';
@@ -17,6 +18,7 @@ import {
   ReadContractParameters,
 } from 'viem';
 import Moralis from 'moralis';
+import { RpcError } from 'shared/rpc-errors';
 
 type BlockRange = { fromBlock: bigint; toBlock: bigint };
 
@@ -69,11 +71,13 @@ export class ExplorerService {
     chain,
     contract,
     event,
+    fromTimestamp,
     fromBlock = 0n,
   }: {
     chain: ChainName;
     contract: Address;
     event: AbiEvent;
+    fromTimestamp?: number;
     fromBlock?: bigint | BlockTag;
   }): Promise<LogEvent[]> {
     let rpcClient = this.rpcClientService.getClient(chain);
@@ -174,39 +178,6 @@ export class ExplorerService {
     return block;
   }
 
-  public async getBlockNumberByTimestamp({
-    chain,
-    timestamp,
-  }: {
-    chain: ChainName;
-    timestamp: number;
-  }): Promise<any> {
-    const moralisChain: Record<ChainName, string> = {
-      [ChainName.ETHEREUM]: '0x1',
-      [ChainName.ARBITRUM]: '0xa4b1',
-      [ChainName.BSC]: '0x38',
-    };
-
-    let blockNumber: bigint | null = null;
-
-    while (blockNumber == null) {
-      try {
-        const response = await Moralis.EvmApi.block.getDateToBlock({
-          chain: moralisChain[chain],
-          date: new Date(timestamp * 1000),
-        });
-
-        blockNumber = BigInt(response.raw.block);
-      } catch (error) {
-        this.logger.error('Error getting block by timestamp..');
-        const delay = Math.random() * 100 + 1000;
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-
-    return blockNumber;
-  }
-
   public async readContract({
     contract,
     abi,
@@ -223,23 +194,31 @@ export class ExplorerService {
     args?: any;
     rpcClient: RpcClient;
   }): Promise<any> {
-    const payload: ReadContractParameters = {
-      address: contract,
-      abi,
-      functionName,
-    };
+    try {
+      const payload: ReadContractParameters = {
+        address: contract,
+        abi,
+        functionName,
+      };
 
-    if (blockNumber) {
-      payload.blockNumber = blockNumber;
+      if (blockNumber) {
+        payload.blockNumber = blockNumber;
+      }
+
+      if (args) {
+        payload.args = args;
+      }
+
+      const data = await rpcClient.client.readContract(payload);
+
+      return data;
+    } catch (error) {
+      if (error?.cause?.name === RpcError.ContractFunctionZeroDataError) {
+        return null;
+      }
+
+      throw new Error(error);
     }
-
-    if (args) {
-      payload.args = args;
-    }
-
-    const data = await rpcClient.client.readContract(payload);
-
-    return data;
   }
 
   public async isContract(
@@ -270,5 +249,70 @@ export class ExplorerService {
     } catch (error) {
       console.log('Error getting byte code: ', error);
     }
+  }
+
+  public async findNearestBlock({
+    targetTimestamp,
+    higherLimitStamp,
+    rpcClient,
+    chain,
+  }: {
+    targetTimestamp: number;
+    higherLimitStamp?: number;
+    rpcClient: RpcClient;
+    chain: ChainName;
+  }): Promise<bigint> {
+    const averageBlockTime = CHAIN_BLOCK_TIMES[chain];
+
+    const currentBlockNumber = await rpcClient.client.getBlockNumber();
+    let blockNumber = currentBlockNumber;
+    let block = await rpcClient.client.getBlock({ blockNumber });
+    let requestsMade = 0;
+
+    while (Number(block.timestamp) > targetTimestamp) {
+      let decreaseBlocks =
+        (Number(block.timestamp) - targetTimestamp) / averageBlockTime;
+      decreaseBlocks = Math.floor(decreaseBlocks);
+
+      if (decreaseBlocks < 1) {
+        break;
+      }
+
+      blockNumber = blockNumber - BigInt(decreaseBlocks);
+      block = await rpcClient.client.getBlock({ blockNumber });
+      requestsMade += 1;
+    }
+
+    if (higherLimitStamp) {
+      if (Number(block.timestamp) >= higherLimitStamp) {
+        while (Number(block.timestamp) >= higherLimitStamp) {
+          blockNumber = blockNumber - BigInt(1);
+          block = await rpcClient.client.getBlock({ blockNumber });
+          requestsMade += 1;
+        }
+      }
+
+      if (Number(block.timestamp) < higherLimitStamp) {
+        while (Number(block.timestamp) < higherLimitStamp) {
+          const nextBlockNumber = blockNumber + BigInt(1);
+
+          if (nextBlockNumber > currentBlockNumber) break;
+
+          const tempBlock = await rpcClient.client.getBlock({
+            blockNumber: nextBlockNumber,
+          });
+
+          if (Number(tempBlock.timestamp) >= higherLimitStamp) {
+            break;
+          }
+
+          block = tempBlock;
+          blockNumber = nextBlockNumber;
+          requestsMade += 1;
+        }
+      }
+    }
+
+    return block.number;
   }
 }
