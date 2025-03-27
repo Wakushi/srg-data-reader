@@ -5,6 +5,8 @@ import { ChainName } from 'shared/chains';
 import { envSchema } from 'config/env.validation';
 import { ConfigModule } from '@nestjs/config';
 import { SupabaseModule } from './supabase/supabase.module';
+import { RpcClientModule } from './rpc-client/rpc-client.module';
+import { ALCHEMY_BATCH_SIZE, QUICK_NODE_BATCH_SIZE } from 'shared/constants';
 
 @Module({
   imports: [
@@ -13,19 +15,48 @@ import { SupabaseModule } from './supabase/supabase.module';
       isGlobal: true,
     }),
     TokenModule,
-    ExplorerModule.forRoot({
+    RpcClientModule.forRoot({
       rpcUrls: {
         [ChainName.ETHEREUM]: [
-          `https://eth-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+          {
+            name: 'alchemy-eth',
+            url: `https://eth-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+            batchSize: ALCHEMY_BATCH_SIZE,
+          },
+          {
+            name: 'quick-node-eth',
+            url: `https://patient-fragrant-season.quiknode.pro/${process.env.QUICKNODE_API_KEY}`,
+            batchSize: QUICK_NODE_BATCH_SIZE,
+          },
         ],
         [ChainName.ARBITRUM]: [
-          `https://arb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+          {
+            name: 'alchemy-arb',
+            url: `https://arb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+            batchSize: ALCHEMY_BATCH_SIZE,
+          },
+          {
+            name: 'quick-node-arb',
+            url: `https://patient-fragrant-season.quiknode.pro/${process.env.QUICKNODE_API_KEY}`,
+            batchSize: QUICK_NODE_BATCH_SIZE,
+          },
         ],
         [ChainName.BSC]: [
-          `https://bnb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+          {
+            name: 'alchemy-bsc',
+            url: `https://bnb-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+            batchSize: ALCHEMY_BATCH_SIZE,
+          },
+          {
+            name: 'quick-node-bsc',
+            url: `https://patient-fragrant-season.bsc.quiknode.pro/${process.env.QUICKNODE_API_KEY}`,
+            batchSize: QUICK_NODE_BATCH_SIZE,
+          },
         ],
       },
-      apiKey: process.env.ALCHEMY_API_KEY,
+    }),
+    ExplorerModule.forRoot({
+      apiKey: process.env.MORALIS_API_KEY,
     }),
     SupabaseModule.forRoot({
       privateKey: process.env.SUPABASE_API_KEY,

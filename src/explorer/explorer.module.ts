@@ -1,13 +1,9 @@
 import { DynamicModule, Module } from '@nestjs/common';
-import { RpcUrlConfig } from 'shared/rpc-url-config.type';
 import { ExplorerService } from './explorer.service';
 
 @Module({})
 export class ExplorerModule {
-  static forRoot(config: {
-    rpcUrls: RpcUrlConfig;
-    apiKey?: string;
-  }): DynamicModule {
+  static forRoot(config: { apiKey?: string }): DynamicModule {
     return {
       module: ExplorerModule,
       providers: [

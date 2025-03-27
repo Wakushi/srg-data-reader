@@ -78,16 +78,37 @@ export class TokenController {
   @Post('extract-srg')
   async extractSrgHistory(
     @Body()
-    { chain }: { chain: ChainName },
+    {
+      chain,
+      fromTimestamp,
+      fromBlockNumber,
+    }: {
+      chain: ChainName;
+      fromTimestamp: number;
+      fromBlockNumber: bigint;
+    },
   ) {
     const extractionPayload: SrgExtractionPayload = {
       chain,
     };
 
+    if (fromBlockNumber) {
+      extractionPayload.fromBlockNumber = fromBlockNumber;
+      await this.tokenService.extractSrgHistory(extractionPayload);
+      return;
+    }
+
+    if (fromTimestamp) {
+      extractionPayload.fromTimestamp = fromTimestamp;
+      await this.tokenService.extractSrgHistory(extractionPayload);
+      return;
+    }
+
     const priceHistory = await this.tokenService.getSrgHistory(chain);
 
     if (priceHistory && priceHistory.length) {
       priceHistory.sort((a, b) => b.timestamp - a.timestamp);
+
       const latestPriceAt = priceHistory[0].timestamp;
       const extractFrom = latestPriceAt + ONE_HOUR_IN_SECOND;
 

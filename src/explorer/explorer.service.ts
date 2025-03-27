@@ -1,7 +1,10 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ChainName } from 'shared/chains';
-import { RpcUrlConfig } from 'shared/rpc-url-config.type';
-import { getChainByName } from 'shared/utils';
+import {
+  ALCHEMY_RATE_LIMIT_ERROR_CODE,
+  QUICK_NODE_RATE_LIMIT_ERROR_CODE,
+} from 'shared/constants';
+import { RpcClient, RpcClientService } from 'src/rpc-client/rpc-client.service';
 import { LogEvent } from 'src/token/entities/token.types';
 import {
   Abi,
@@ -9,22 +12,27 @@ import {
   Address,
   Block,
   BlockTag,
-  createPublicClient,
   GetBalanceParameters,
   GetCodeReturnType,
-  http,
-  PublicClient,
   ReadContractParameters,
 } from 'viem';
+import Moralis from 'moralis';
+
+type BlockRange = { fromBlock: bigint; toBlock: bigint };
 
 @Injectable()
 export class ExplorerService {
+  private readonly logger = new Logger(ExplorerService.name);
+
   constructor(
     @Inject('EXPLORER_CONFIG')
-    private readonly config: { rpcUrls: RpcUrlConfig; apiKey: string },
-  ) {}
-
-  private _clientsByChain: Map<ChainName, PublicClient[]> = new Map();
+    private readonly config: { apiKey: string },
+    private readonly rpcClientService: RpcClientService,
+  ) {
+    Moralis.start({
+      apiKey: this.config.apiKey,
+    });
+  }
 
   public async getBalance({
     chain,
@@ -34,17 +42,27 @@ export class ExplorerService {
     chain: ChainName;
     contract: Address;
     blockNumber?: bigint | null;
-  }): Promise<bigint> {
-    const client = this.getClient(chain);
+  }): Promise<bigint | null> {
+    let retries = 0;
+    const MAX_RETRIES = 10;
 
-    const balanceParams: GetBalanceParameters = {
-      address: contract,
-      ...(blockNumber ? { blockNumber } : {}),
-    };
+    let rpClient = this.rpcClientService.getClient(chain);
 
-    const balance = await client.getBalance(balanceParams);
+    while (retries <= MAX_RETRIES) {
+      try {
+        const balanceParams: GetBalanceParameters = {
+          address: contract,
+          ...(blockNumber ? { blockNumber } : {}),
+        };
 
-    return balance;
+        return await rpClient.client.getBalance(balanceParams);
+      } catch (error) {
+        retries++;
+        rpClient = this.rpcClientService.getClient(chain);
+      }
+    }
+
+    return null;
   }
 
   public async getLogs({
@@ -58,161 +76,144 @@ export class ExplorerService {
     event: AbiEvent;
     fromBlock?: bigint | BlockTag;
   }): Promise<LogEvent[]> {
-    try {
-      const client = this.getClient(chain);
-      const allLogs: any[] = [];
+    let rpcClient = this.rpcClientService.getClient(chain);
 
-      if (
-        chain === ChainName.BSC &&
-        (fromBlock === 0n || fromBlock === 'earliest')
-      ) {
-        const latestBlock = await client.getBlockNumber();
+    const latestBlock = await rpcClient.client.getBlockNumber();
+    let startBlock = typeof fromBlock === 'bigint' ? fromBlock : 0n;
 
-        const chunkSize = 100000n;
-        let startBlock = typeof fromBlock === 'bigint' ? fromBlock : 0n;
+    const rangeSize = 499n;
 
-        const totalChunkCount = (latestBlock - startBlock) / chunkSize;
-        let chunkCount = 0;
+    const blockRanges: BlockRange[] = [];
 
-        while (startBlock <= latestBlock) {
-          const endBlock =
-            startBlock + chunkSize > latestBlock
-              ? latestBlock
-              : startBlock + chunkSize;
+    while (startBlock <= latestBlock) {
+      const endBlock =
+        startBlock + rangeSize > latestBlock
+          ? latestBlock
+          : startBlock + rangeSize;
 
-          console.log(
-            `Processing ${chunkCount}/${totalChunkCount} (R: ${startBlock} <-> ${endBlock})`,
-          );
+      blockRanges.push({
+        fromBlock: startBlock,
+        toBlock: endBlock,
+      });
 
-          try {
-            const chunkLogs = await client.getLogs({
+      startBlock = endBlock + 1n;
+    }
+
+    const completeResults: LogEvent[] = [];
+
+    let batchCounter = 1;
+    let batch: BlockRange[] = [];
+
+    while (blockRanges.length > 0) {
+      this.logger.log(
+        `Client: ${rpcClient.client.transport.name} | Max size ${rpcClient.batchSize} | (${blockRanges.length} entries remaining)`,
+      );
+
+      batch = blockRanges.splice(0, rpcClient.batchSize);
+
+      try {
+        const logs = await Promise.all(
+          batch.map(async ({ fromBlock, toBlock }) => {
+            const results = await rpcClient.client.getLogs({
               address: contract,
               event,
-              fromBlock: startBlock,
-              toBlock: endBlock,
+              fromBlock,
+              toBlock,
             });
 
-            if (chunkLogs.length) {
-              console.log('Logs chunked ', chunkLogs.length);
-            }
+            return results as unknown as LogEvent;
+          }),
+        );
 
-            allLogs.push(...chunkLogs);
+        completeResults.push(...logs.flat());
 
-            startBlock = endBlock + 1n;
-            chunkCount++;
-          } catch (error) {
-            console.error(
-              `Error getting logs for block range ${startBlock}-${endBlock}: ${error}`,
-            );
-          }
+        batchCounter++;
+      } catch (error) {
+        const delay = Math.random() * 100 + 1000;
+
+        if (
+          error?.code === ALCHEMY_RATE_LIMIT_ERROR_CODE ||
+          error?.code === QUICK_NODE_RATE_LIMIT_ERROR_CODE
+        ) {
+          this.logger.log(
+            `${rpcClient.client.transport.name} failed (${error?.code}) | Waiting ${delay}ms...`,
+          );
+
+          await new Promise((resolve) => setTimeout(resolve, delay));
         }
-      } else {
-        const logs = await client.getLogs({
-          address: contract,
-          event,
-          fromBlock,
-        });
 
-        allLogs.push(...logs);
+        blockRanges.push(...batch);
+        rpcClient = this.rpcClientService.getClient(chain);
       }
-
-      allLogs.sort((a, b) => Number(a.blockNumber) - Number(b.blockNumber));
-
-      return allLogs;
-    } catch (error) {
-      console.error('Error getting logs ' + error);
-      return [];
     }
+
+    const results = completeResults.sort(
+      (a, b) => Number(a.blockNumber) - Number(b.blockNumber),
+    );
+
+    return results;
   }
 
   public async getBlock(
     chain: ChainName,
     blockNumber?: bigint | null,
   ): Promise<Block | null> {
-    try {
-      const client = this.getClient(chain);
+    let block: Block | null = null;
+    let rpcClient = this.rpcClientService.getClient(chain);
 
-      const block: Block = await client.getBlock(
-        blockNumber ? { blockNumber } : {},
-      );
-
-      return block;
-    } catch (error) {
-      console.log('Error fetching block ' + error);
-      return null;
+    while (!block) {
+      try {
+        block = await rpcClient.client.getBlock(
+          blockNumber ? { blockNumber } : {},
+        );
+      } catch (error) {
+        rpcClient = this.rpcClientService.getClient(chain);
+      }
     }
+
+    return block;
   }
 
   public async getBlockNumberByTimestamp({
     chain,
     timestamp,
-    maxRetries = 5,
-    initialDelay = 1000,
   }: {
     chain: ChainName;
     timestamp: number;
-    maxRetries?: number;
-    initialDelay?: number;
   }): Promise<any> {
-    const alchemyChain: Record<ChainName, string> = {
-      [ChainName.ETHEREUM]: 'eth-mainnet',
-      [ChainName.ARBITRUM]: 'arb-mainnet',
-      [ChainName.BSC]: 'bnb-mainnet',
+    const moralisChain: Record<ChainName, string> = {
+      [ChainName.ETHEREUM]: '0x1',
+      [ChainName.ARBITRUM]: '0xa4b1',
+      [ChainName.BSC]: '0x38',
     };
 
-    let retries = 0;
-    let delay = initialDelay;
+    let blockNumber: bigint | null = null;
 
-    while (retries <= maxRetries) {
+    while (blockNumber == null) {
       try {
-        const response = await fetch(
-          `https://api.g.alchemy.com/data/v1/${this.config.apiKey}/utility/blocks/by-timestamp?networks=${alchemyChain[chain]}&timestamp=${timestamp}&direction=AFTER`,
-        );
+        const response = await Moralis.EvmApi.block.getDateToBlock({
+          chain: moralisChain[chain],
+          date: new Date(timestamp * 1000),
+        });
 
-        if (!response.ok) {
-          if (response.status === 429) {
-            throw new Error('Rate limit exceeded');
-          }
-
-          if (response.status >= 500) {
-            throw new Error(`Server error: ${response.status}`);
-          }
-        }
-
-        const { data } = await response.json();
-
-        if (!data || !data[0] || !data[0].block) {
-          throw new Error('Invalid response format from API');
-        }
-
-        return data[0].block.number;
+        blockNumber = BigInt(response.raw.block);
       } catch (error) {
-        retries++;
-
-        if (retries > maxRetries) {
-          console.error(`Failed after ${maxRetries} retries:`, error);
-          throw error;
-        }
-
-        console.warn(
-          `Retry attempt ${retries}/${maxRetries} after error: ${error}. Waiting ${delay}ms...`,
-        );
-
+        this.logger.error('Error getting block by timestamp..');
+        const delay = Math.random() * 100 + 1000;
         await new Promise((resolve) => setTimeout(resolve, delay));
-
-        delay = delay * 2 * (0.9 + Math.random() * 0.2);
       }
     }
+
+    return blockNumber;
   }
 
   public async readContract({
-    chain,
     contract,
     abi,
     functionName,
     blockNumber,
     args,
-    clientNode,
+    rpcClient,
   }: {
     chain: ChainName;
     contract: Address;
@@ -220,7 +221,7 @@ export class ExplorerService {
     functionName: string;
     blockNumber?: bigint;
     args?: any;
-    clientNode?: PublicClient;
+    rpcClient: RpcClient;
   }): Promise<any> {
     const payload: ReadContractParameters = {
       address: contract,
@@ -228,24 +229,17 @@ export class ExplorerService {
       functionName,
     };
 
-    try {
-      const client = clientNode ? clientNode : this.getClient(chain);
-
-      if (blockNumber) {
-        payload.blockNumber = blockNumber;
-      }
-
-      if (args) {
-        payload.args = args;
-      }
-
-      const data = await client.readContract(payload);
-
-      return data;
-    } catch (error) {
-      const errorMsg = `Error reading contract with ${functionName}() payload ${JSON.stringify(payload)}`;
-      throw new Error(errorMsg + ' ' + error);
+    if (blockNumber) {
+      payload.blockNumber = blockNumber;
     }
+
+    if (args) {
+      payload.args = args;
+    }
+
+    const data = await rpcClient.client.readContract(payload);
+
+    return data;
   }
 
   public async isContract(
@@ -266,54 +260,15 @@ export class ExplorerService {
     chain: ChainName,
   ): Promise<GetCodeReturnType> {
     try {
-      const client = this.getClient(chain);
+      const rpcClient = this.rpcClientService.getClient(chain);
 
-      const bytecode = await client.getCode({
+      const bytecode = await rpcClient.client.getCode({
         address: address as `0x${string}`,
       });
 
       return bytecode;
     } catch (error) {
       console.log('Error getting byte code: ', error);
-    }
-  }
-
-  public getClient(chain: ChainName): PublicClient {
-    const clients = this.getClients(chain);
-
-    if (!clients || !clients.length) {
-      throw new Error('No clients found for chain ' + chain);
-    }
-
-    return clients[0];
-  }
-
-  public getClients(chainName: ChainName): PublicClient[] {
-    const clients = this._clientsByChain.get(chainName);
-
-    if (clients) return clients;
-
-    try {
-      const rpcUrls = this.config.rpcUrls[chainName];
-
-      if (!rpcUrls || !rpcUrls.length) {
-        throw new Error('Missing RPCs for chain ' + chainName);
-      }
-
-      const chain = getChainByName(chainName);
-
-      const newClients = rpcUrls.map((url) => {
-        return createPublicClient({
-          chain,
-          transport: http(url),
-        });
-      });
-
-      this._clientsByChain.set(chainName, newClients);
-
-      return newClients;
-    } catch (error) {
-      throw new Error('Unable to connect to RPC client. ' + error);
     }
   }
 }

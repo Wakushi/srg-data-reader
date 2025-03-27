@@ -46,3 +46,13 @@ export interface LogEvent {
   transactionHash: string;
   transactionIndex?: number;
 }
+
+export type TokenMetadata = {
+  id?: number;
+  name?: string;
+  symbol?: string;
+  token_address: string;
+  chain: string;
+  deployed_at: number;
+  created_at?: Date;
+};

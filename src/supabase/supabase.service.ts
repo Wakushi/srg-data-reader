@@ -2,7 +2,10 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Collection } from './entities/collections.type';
 import { ONE_HOUR_IN_SECOND } from 'shared/constants';
-import { Srg20HourlyPrice } from 'src/token/entities/token.types';
+import {
+  Srg20HourlyPrice,
+  TokenMetadata,
+} from 'src/token/entities/token.types';
 
 @Injectable()
 export class SupabaseService {
@@ -26,6 +29,67 @@ export class SupabaseService {
 
   private get client(): SupabaseClient<any, 'public', any> {
     return this._client;
+  }
+
+  public async saveTokenMetadata(
+    metadata: Partial<TokenMetadata> &
+      Pick<
+        TokenMetadata,
+        'token_address' | 'chain' | 'name' | 'symbol' | 'deployed_at'
+      >,
+  ): Promise<TokenMetadata> {
+    try {
+      const { token_address, chain, name, symbol, deployed_at } = metadata;
+
+      const metadataToSave = {
+        token_address,
+        chain,
+        name,
+        symbol,
+        deployed_at,
+      };
+
+      const { data, error } = await this.client
+        .from(Collection.TOKEN_METADATA)
+        .upsert(metadataToSave, {
+          onConflict: 'token_address,chain',
+        })
+        .select()
+        .single();
+
+      if (error) {
+        throw new SupabaseError(
+          `Failed to save token metadata: ${error.message}`,
+          error,
+        );
+      }
+
+      return data as TokenMetadata;
+    } catch (error) {
+      this.logger.error('Error in saveTokenMetadata:', error);
+      throw error;
+    }
+  }
+
+  public async getTokenMetadata(
+    contract: string,
+  ): Promise<TokenMetadata | null> {
+    try {
+      const { data, error } = await this.client
+        .from(Collection.TOKEN_METADATA)
+        .select('*')
+        .eq('token_address', contract)
+        .single();
+
+      if (error) throw error;
+
+      if (!data) return null;
+
+      return data;
+    } catch (error) {
+      this.logger.error('Error in getTokenMetadata:', error);
+      return null;
+    }
   }
 
   public async getTokenHistory(contract: string): Promise<Srg20HourlyPrice[]> {

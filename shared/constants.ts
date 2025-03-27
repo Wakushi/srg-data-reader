@@ -3,7 +3,15 @@ import { AbiEvent, Address, keccak256, toBytes } from 'viem';
 
 export const ONE_HOUR_IN_SECOND = 60 * 60;
 
+export const ALCHEMY_BATCH_SIZE = 15;
+export const QUICK_NODE_BATCH_SIZE = 10;
+
+export const ALCHEMY_RATE_LIMIT_ERROR_CODE = 429;
+export const QUICK_NODE_RATE_LIMIT_ERROR_CODE = -32007;
+
 export const WETH_USDC_POOL = '0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640';
+export const WETH_USDC_ARB_POOL = '0xC6962004f452bE9203591991D15f6b388e09E8D0';
+export const WBNB_USDT_POOL = '0x16b9a82891338f9bA80E2D6970FddA79D1eb0daE';
 
 export const SRG_CONTRACTS: Record<ChainName, Address> = {
   [ChainName.ETHEREUM]: '0xcD682EF09d07668d49A8103ddD65Ff54AebFbfDe',
