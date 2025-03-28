@@ -17,7 +17,6 @@ import {
   GetCodeReturnType,
   ReadContractParameters,
 } from 'viem';
-import Moralis from 'moralis';
 import { RpcError } from 'shared/rpc-errors';
 
 type BlockRange = { fromBlock: bigint; toBlock: bigint };
@@ -30,11 +29,7 @@ export class ExplorerService {
     @Inject('EXPLORER_CONFIG')
     private readonly config: { apiKey: string },
     private readonly rpcClientService: RpcClientService,
-  ) {
-    Moralis.start({
-      apiKey: this.config.apiKey,
-    });
-  }
+  ) {}
 
   public async getBalance({
     chain,
@@ -262,6 +257,10 @@ export class ExplorerService {
     rpcClient: RpcClient;
     chain: ChainName;
   }): Promise<bigint> {
+    if (chain === ChainName.ARBITRUM) {
+      return await this.getBlockNumberByTimestamp(chain, targetTimestamp);
+    }
+
     const averageBlockTime = CHAIN_BLOCK_TIMES[chain];
 
     const currentBlockNumber = await rpcClient.client.getBlockNumber();
@@ -278,7 +277,7 @@ export class ExplorerService {
         break;
       }
 
-      blockNumber = blockNumber - BigInt(decreaseBlocks);
+      blockNumber = blockNumber - BigInt(decreaseBlocks); // -40887775n
       block = await rpcClient.client.getBlock({ blockNumber });
       requestsMade += 1;
     }
@@ -314,5 +313,39 @@ export class ExplorerService {
     }
 
     return block.number;
+  }
+
+  public async getBlockNumberByTimestamp(
+    chain: ChainName,
+    timestamp: number,
+  ): Promise<any> {
+    const alchemyChain: Record<ChainName, string> = {
+      [ChainName.ETHEREUM]: 'eth-mainnet',
+      [ChainName.ARBITRUM]: 'arb-mainnet',
+      [ChainName.BSC]: 'bnb-mainnet',
+    };
+
+    let blockNumber: number | null = null;
+    const date = new Date(timestamp * 1000);
+    const url = `https://api.g.alchemy.com/data/v1/${this.config.apiKey}/utility/blocks/by-timestamp?networks=${alchemyChain[chain]}&timestamp=${date.toISOString()}&direction=AFTER`;
+
+    while (blockNumber === null) {
+      try {
+        const response = await fetch(url);
+
+        const { data, error } = await response.json();
+
+        if (error) {
+          throw new Error('Alchemy API error');
+        }
+
+        return data[0].block.number;
+      } catch (error) {
+        const delay = Math.random() * 100 + 1000;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+
+    return blockNumber;
   }
 }

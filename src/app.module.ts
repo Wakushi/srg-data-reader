@@ -56,7 +56,7 @@ import { ALCHEMY_BATCH_SIZE, QUICK_NODE_BATCH_SIZE } from 'shared/constants';
       },
     }),
     ExplorerModule.forRoot({
-      apiKey: process.env.MORALIS_API_KEY,
+      apiKey: process.env.ALCHEMY_API_KEY,
     }),
     SupabaseModule.forRoot({
       privateKey: process.env.SUPABASE_API_KEY,

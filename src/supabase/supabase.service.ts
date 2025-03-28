@@ -11,7 +11,7 @@ import {
 export class SupabaseService {
   private readonly logger = new Logger(SupabaseService.name);
 
-  private _client: SupabaseClient<any, 'public', any>;
+  private client: SupabaseClient<any, 'public', any>;
 
   private readonly BATCH_SIZE = 100;
 
@@ -24,11 +24,7 @@ export class SupabaseService {
     if (!privateKey) throw new Error(`Expected env var SUPABASE_API_KEY`);
     if (!url) throw new Error(`Expected env var SUPABASE_URL`);
 
-    this._client = createClient(url, privateKey);
-  }
-
-  private get client(): SupabaseClient<any, 'public', any> {
-    return this._client;
+    this.client = createClient(url, privateKey);
   }
 
   public async saveTokenMetadata(

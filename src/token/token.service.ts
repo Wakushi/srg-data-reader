@@ -847,6 +847,12 @@ export class TokenService {
 
     if (!fromTimestamp && !fromBlockNumber) {
       firstBlock = await this.getSrgCreationBlock({ chain, contract });
+
+      await this.supabaseService.saveTokenMetadata({
+        token_address: contract,
+        chain,
+        deployed_at: Number(firstBlock?.timestamp),
+      });
     }
 
     if (fromTimestamp && rpcClient) {
@@ -872,12 +878,6 @@ export class TokenService {
     for (let time = startTime; time <= endTime; time += ONE_HOUR_IN_SECOND) {
       hourlyTimestamps.push(time);
     }
-
-    await this.supabaseService.saveTokenMetadata({
-      token_address: contract,
-      chain,
-      deployed_at: startTime,
-    });
 
     return hourlyTimestamps;
   }
